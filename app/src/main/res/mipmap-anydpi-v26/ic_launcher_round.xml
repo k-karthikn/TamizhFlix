@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/black" />
+    <foreground>
+        <inset android:inset="18%">
+            <bitmap android:src="@drawable/tamizhflix_logo"
+                android:gravity="fill" android:filter="true" android:antialias="true" />
+        </inset>
+    </foreground>
+</adaptive-icon>
