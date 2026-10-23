@@ -1,6 +1,7 @@
 package com.karthi.tamizhflix.data
 
 import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
@@ -88,6 +89,67 @@ class CatalogueTest {
         val choices = CatalogueParser.choices(doc)
         assertEquals(1, choices.size)
         assertEquals("Download Server 1", choices.single().title)
+    }
+    @Test fun findsDownloadLinksInAlternateLayouts() {
+        val button = CatalogueParser.document(Page("https://example.com/release", """
+            <a class='download-button' href='/file/movie.mp4'>Get file</a>
+            <a href='/social'>Facebook</a>
+        """))
+        assertEquals("https://example.com/file/movie.mp4", CatalogueParser.choices(button).single().url)
+        val scripted = CatalogueParser.document(Page("https://example.com/gateway", """
+            <script>window.location.href = '/next-step';</script>
+        """))
+        assertEquals("https://example.com/next-step", CatalogueParser.choices(scripted).single().url)
+        val form = CatalogueParser.document(Page("https://example.com/gateway", """
+            <form action='/get-file' method='get'>Download file<input type='hidden' name='id' value='42'></form>
+        """))
+        assertEquals("https://example.com/get-file?id=42", CatalogueParser.choices(form).single().url)
+    }
+    @Test fun collectsEveryEpisodePageAndReusesCompleteChoices() = runBlocking {
+        val start = "https://example.com/vikram-on-duty/"
+        val calls = mutableListOf<String>()
+        val repo = CatalogueRepository(PageFetcher { url, _ ->
+            calls.add(url)
+            val page = url.toHttpUrl().queryParameter("page") ?: "1"
+            Page(url, """
+                <div class='f'><a href='/episode-$page'>Episode $page</a></div>
+                <div class='pagination'><a href='?page=2'>2</a><a href='?page=3'>3</a></div>
+            """)
+        })
+        val first = repo.resolve(Link("Vikram On Duty", start)) as Resolution.Choices
+        assertEquals(listOf("Episode 1", "Episode 2", "Episode 3"), first.links.map { it.title })
+        assertEquals(3, calls.size)
+        assertEquals(first, repo.resolve(Link("Vikram On Duty", start)))
+        assertEquals(4, calls.size)
+    }
+    @Test fun offersEpisodePageWhenOnePageCannotBeLoaded() = runBlocking {
+        val start = "https://example.com/series/"
+        val repo = CatalogueRepository(PageFetcher { url, _ ->
+            if (url.contains("page=2")) throw IOException("Temporary failure")
+            Page(url, "<div class='f'><a href='/episode-1'>Episode 1</a></div>" +
+                "<div class='pagination'><a href='?page=2'>2</a></div>")
+        })
+        val choices = repo.resolve(Link("Series", start)) as Resolution.Choices
+        assertEquals(2, choices.links.size)
+        assertEquals("Open episode page 2", choices.links.last().title)
+    }
+    @Test fun collectsPathPaginationWithDownloadButtons() = runBlocking {
+        val repo = CatalogueRepository(PageFetcher { url, _ ->
+            val number = if (url.endsWith("/2")) "2" else "1"
+            Page(url, "<a class='download' href='/episode-$number.mp4'>Episode $number</a>" +
+                "<div class='pagination'><a href='/season/v/2'>2</a></div>")
+        })
+        val choices = repo.resolve(Link("Season", "https://example.com/season/v")) as Resolution.Choices
+        assertEquals(listOf("Episode 1", "Episode 2"), choices.links.map { it.title })
+    }
+    @Test fun resolvesLongerLegacyReleaseChain() = runBlocking {
+        val repo = CatalogueRepository(PageFetcher { url, _ ->
+            val step = url.substringAfterLast('/').toIntOrNull() ?: 1
+            if (step == 18) Page("https://example.com/file.mp4", mediaType = "video/mp4")
+            else Page(url, "<div class='dlink'><a href='/${step + 1}'>Continue</a></div>")
+        })
+        val file = repo.resolve(Link("2012 film", "https://example.com/1")) as Resolution.File
+        assertEquals("https://example.com/file.mp4", file.link.url)
     }
     @Test fun cyclicResolverStops() = runBlocking {
         var calls = 0

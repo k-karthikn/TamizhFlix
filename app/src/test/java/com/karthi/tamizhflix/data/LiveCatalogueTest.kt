@@ -9,6 +9,12 @@ import org.junit.Test
 class LiveCatalogueTest {
     @Test fun tamilSearchAndResolver() = checkSource(Source.TAMIL, "Varavu")
     @Test fun dubbedSearchAndResolver() = checkSource(Source.DUBBED, "Virus")
+    @Test fun vikramOnDutyIncludesLaterEpisodePages() = runBlocking {
+        assumeTrue(System.getenv("TAMIZHFLIX_LIVE_TEST") == "1")
+        val repo = CatalogueRepository(HttpPageFetcher())
+        val result = repo.resolve(Link("Vikram On Duty", "https://moviesda.ski/vikram-on-duty-2026-tamil-web-series/"))
+        assertTrue("Expected paginated episode choices", result is Resolution.Choices && result.links.size > 20)
+    }
     private fun checkSource(source: Source, title: String) = runBlocking {
         assumeTrue(System.getenv("TAMIZHFLIX_LIVE_TEST") == "1")
         val repo = CatalogueRepository(HttpPageFetcher())

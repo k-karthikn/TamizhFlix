@@ -1,7 +1,8 @@
 package com.karthi.tamizhflix
 
+import android.app.Application
 import androidx.compose.runtime.*
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.karthi.tamizhflix.data.*
 import kotlinx.coroutines.CancellationException
@@ -9,9 +10,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 
-class MovieViewModel : ViewModel() {
+class MovieViewModel(application: Application) : AndroidViewModel(application) {
     val transport = HttpPageFetcher()
-    private val repository = CatalogueRepository(transport)
+    private val repository = CatalogueRepository(transport, RemoteDomains(application))
     var query by mutableStateOf("")
     var year by mutableStateOf("")
     var source by mutableStateOf(Source.TAMIL)
@@ -37,6 +38,7 @@ class MovieViewModel : ViewModel() {
     private var searchJob: Job? = null
     private var resolveJob: Job? = null
     private var lastLink: Link? = null
+    private var lastServerBackups = emptyList<Link>()
     private val history = mutableListOf<Resolution>()
     var canGoBack by mutableStateOf(false)
         private set
@@ -73,6 +75,12 @@ class MovieViewModel : ViewModel() {
     fun open(movie: Link) { close(); selected = movie; follow(movie) }
     fun follow(link: Link, remember: Boolean = true) {
         resolveJob?.cancel()
+        val backups = if (!remember) lastServerBackups else {
+            val choices = (resolution as? Resolution.Choices)?.links.orEmpty()
+            if (choices.size > 1 && choices.all { it.title.contains(Regex("\\b(server|mirror)\\b", RegexOption.IGNORE_CASE)) })
+                choices.filterNot { it.url == link.url } else emptyList()
+        }
+        lastServerBackups = backups
         if (remember) resolution?.let { history.add(it) }
         canGoBack = history.isNotEmpty()
         lastLink = link
@@ -80,10 +88,20 @@ class MovieViewModel : ViewModel() {
         resolving = true
         resolution = null
         resolveJob = viewModelScope.launch {
-            try { resolution = repository.resolve(link) }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) { resolverError = message(e) }
-            finally { if (isActive) resolving = false }
+            try {
+                var failure: Exception? = null
+                for (candidate in listOf(link) + backups) {
+                    try {
+                        resolution = repository.resolve(candidate)
+                        failure = null
+                        break
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { failure = e }
+                }
+                if (failure != null) resolverError = message(failure)
+            } finally {
+                if (isActive) resolving = false
+            }
         }
     }
     fun retry() { lastLink?.let { follow(it, false) } }
@@ -101,6 +119,7 @@ class MovieViewModel : ViewModel() {
         resolverError = null
         resolving = false
         history.clear()
+        lastServerBackups = emptyList()
         canGoBack = false
     }
     private fun message(e: Exception) = when (e) {
